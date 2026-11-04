@@ -1,0 +1,192 @@
+generator client {
+provider = "prisma-client-js"
+output = "./__generated__"
+}
+
+datasource db {
+    provider = "postgresql"
+}
+
+enum GlobalRole {
+  ADMIN
+  USER
+}
+
+enum Department {
+  IT
+  HR
+  SALES
+  MARKETING
+  FINANCE
+  OPERATIONS
+  LEGAL
+  CUSTOMER_SUPPORT
+  RESEARCH_AND_DEVELOPMENT
+  ADMINISTRATION
+}
+
+model User {
+  id            String      @id @default(cuid())
+  name          String    
+  email         String      @unique 
+  image         String?
+  password      String
+  bio           String?    
+  role          GlobalRole  @default(USER)
+  department    Department?
+  isOnline      Boolean     @default(false)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  method AuthMethod @default(CREDENTIALS)
+  accounts Account[]
+    
+  messages    Message[]
+  chats       ChatMember[]
+  attachments Attachment[]
+}
+
+enum AuthMethod {
+    CREDENTIALS
+}
+
+model Token {
+id String @id @default(cuid())
+
+email String
+token String @unique
+type TokenType
+expiresIn DateTime @map("expires_in")
+}
+
+enum TokenType {
+    VERIFICATION
+    PASSWORD_RESET
+}
+
+model Account {
+  id String @id @default(cuid())
+
+   type String
+   provider String
+
+   refreshToken String? @map("refresh_token") 
+   accessToken String? @map("access_token") 
+   expiresAt Int @map("expires_at")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String? @map("user_id")
+
+  @@map("accounts")  
+}
+
+
+
+
+// ----------------------------------------------------
+// CHAT & MESSAGING
+// ----------------------------------------------------
+
+enum ChatType {
+  DIRECT
+  GROUP
+}
+
+model Chat {
+  id        String   @id @default(cuid())
+  type      ChatType @default(DIRECT)
+  name      String?
+  description String?
+  imageUrl  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Детерминированный ключ пары для DIRECT-чатов: "min(userId):max(userId)".
+  // NULL для GROUP. UNIQUE даёт защиту от race condition на уровне БД:
+  // конкурентные транзакции не смогут создать два DIRECT-чата для одной пары.
+  directKey String? @unique @map("direct_key")
+
+  lastMessageId String?  @unique
+  lastMessage   Message? @relation("LastChatMessage", fields: [lastMessageId], references: [id], onDelete: SetNull)
+
+  messages Message[]    @relation("ChatMessages")
+  members  ChatMember[]
+
+  @@index([type])
+}
+
+enum MemberRole {
+  ADMIN
+  MEMBER
+}
+
+model ChatMember {
+  id         String     @id @default(cuid())
+  role       MemberRole @default(MEMBER)
+  joinedAt   DateTime   @default(now())
+  lastReadAt DateTime   @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  chatId String
+  chat   Chat   @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, chatId])
+  @@index([userId])
+  @@index([chatId])
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+}
+
+enum MessageKind {
+  USER
+  SYSTEM
+}
+
+model Message {
+  id        String        @id @default(cuid())
+  content   String?
+  // Системные события треда («Алиса добавила Боба»): рендерятся
+  // по центру без бабла, не требуют ответа. kind неизменяем.
+  kind      MessageKind   @default(USER)
+  status    MessageStatus @default(SENT)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  senderId String
+  sender   User   @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  chatId String
+  chat   Chat   @relation("ChatMessages", fields: [chatId], references: [id], onDelete: Cascade)
+
+  chatLastMessage Chat?        @relation("LastChatMessage")
+  attachments     Attachment[]
+
+  @@index([chatId, createdAt])
+}
+
+model Attachment {
+  id        String   @id @default(cuid())
+  url       String   
+  fileName  String   
+  fileSize  Int      // в байтах
+  mimeType  String   
+  createdAt DateTime @default(now())
+
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  uploaderId String
+  uploader   User   @relation(fields: [uploaderId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+}
