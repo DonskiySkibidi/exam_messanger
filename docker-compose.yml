@@ -1,0 +1,111 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: messenger_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: "123456"
+      POSTGRES_DB: messenger_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: messenger_redis
+    restart: unless-stopped
+    command: redis-server --requirepass pass123456
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  redisGui:
+    image: redis/redisinsight
+    container_name: messenger_redis_gui
+    restart: unless-stopped
+    ports:
+      - "5540:5540"
+    volumes:
+      - redisinsight_data:/data
+    depends_on:
+      - redis
+
+  minio:
+    # Зеркало официального образа (minio/minio удалён с Docker Hub,
+    # MinIO переехал на Quay). Тег проверен через Hub API: существует,
+    # amd64/arm64. mc-образы в этом неймспейсе ОТСУТСТВУЮТ — поэтому
+    # бакет создаёт сам бэкенд при старте (S3StorageDriver.onModuleInit),
+    # отдельный minio-init через несуществующий alpine/mc и ронял compose.
+    image: alpine/minio:RELEASE.2025-10-15T17-29-55Z
+    container_name: messenger_minio
+    restart: unless-stopped
+    # Зеркальный образ стартует не от root, а именованный volume мог
+    # остаться с root-правами от прошлых запусков → "file access denied"
+    # на /data/.minio.sys. Принудительно запускаем от root.
+    user: "0:0"
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: "minioadmin"
+      MINIO_ROOT_PASSWORD: "minioadmin123"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: messenger_backend
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: "postgresql://root:123456@postgres:5432/messenger_db?schema=public"
+      POSTGRES_URI: "postgresql://root:123456@postgres:5432/messenger_db?schema=public"
+      REDIS_URI: "redis://:pass123456@redis:6379"
+      PORT: 4000
+      ALLOWED_ORIGIN: "http://localhost:3000"
+      FILE_STORAGE_DRIVER: "s3"
+      S3_ENDPOINT: "http://minio:9000"
+      S3_PUBLIC_ENDPOINT: "http://localhost:9000"
+      S3_REGION: "us-east-1"
+      S3_BUCKET: "chat-uploads"
+      S3_ACCESS_KEY: "minioadmin"
+      S3_SECRET_KEY: "minioadmin123"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    depends_on:
+      - postgres
+      - redis
+      - minio
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: messenger_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_SERVER_URL: "http://localhost:4000"
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  pg_data:
+  redis_data:
+  redisinsight_data:
+  minio_data:
